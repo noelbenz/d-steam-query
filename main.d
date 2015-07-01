@@ -154,28 +154,73 @@ class MasterServerQuery
 		
 	}
 	
-	/// Waits for a response until it times out.
+	/// Waits for a response until time out.
 	/// Return's true if a response was received and false if a timeout occurs.
 	private bool wait()
 	{
+		ubyte[6] magic = [0xFF, 0xFF, 0xFF, 0xFF, 0x66, 0x0A];
+		
 		auto timeout = timeInMs(timeoutDuration*1000);
 		while(!pastTime(timeout))
 		{
 			int bytesRead = socket.receive(buffer);
-			if(bytesRead > 0)
+			if(bytesRead > cast(int)magic.length)
 			{
-				bufferSlice = buffer[0..bytesRead];
-				return true;
+				if(buffer[0..magic.length] == magic)
+				{
+					bufferSlice = buffer[magic.length..bytesRead];
+					return true;
+				}
+				else
+				{
+					io.writeln("Magic does not match, ignoring packet (size=", bytesRead, ").");
+				}
+			}
+			else if(bytesRead >= 0)
+			{
+				io.writeln("Magic does not match, ignoring packet (size=", bytesRead, ").");
+			}
+			else if(bytesRead == socket.ERROR)
+			{
+				// From testing, bytesRead returns -1 if there is no data
+				// to read (non-blocking) or if the buffer size is too small
+				// to contain all the data. Error text did not prove useful
+				// and just printed: 'The operation completed successfully.'
+				// io.writeln("Socket read error: ", socket.getErrorText());
 			}
 			sleepms(25);
 		}
 		
 		return false;
 	}
-
+	
 	void process()
 	{
-		io.writeln(bufferSlice);
+		ubyte[] data = bufferSlice;
+		
+		IPAddress lastIP;
+		while(data.length >= 6)
+		{
+			IPAddress ip;
+			ip.a = data[0];
+			ip.b = data[1];
+			ip.c = data[2];
+			ip.d = data[3];
+			ip.port = data[4];
+			ip.port <<= 8;
+			ip.port += data[5];
+			
+			data = data[6..$];
+			
+			lastIP = ip;
+			
+			if(onReceiveIP)
+				onReceiveIP(ip);
+		}
+		if(data.length > 0)
+			io.writeln("Extra data in packet: ", data);
+		
+		
 	}
 }
 
@@ -188,21 +233,11 @@ void main()
 	query.ip = "0.0.0.0:0";
 	query.filter = "";
 	
+	msq.onReceiveIP = delegate void(IPAddress ip)
+	{
+		io.writeln(ip.a, ".", ip.b, ".", ip.c, ".", ip.d, ":", ip.port);
+	};
+	
 	msq.query(query);
 	
-	/*
-	ubyte[2048] data;
-	
-	ubyte[13] query = [0x31, 0xFF, 0x30, 0x2E, 0x30, 0x2E, 0x30, 0x2E, 0x30, 0x3A, 0x30, 0x00, 0x00];
-	socket.send(query);
-	
-	while(true)
-	{
-		int i = socket.receive(data);
-		if(i > 0)
-		{
-			process(data[0..i]);
-		}
-	}
-	*/
 }
