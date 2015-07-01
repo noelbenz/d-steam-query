@@ -64,6 +64,16 @@ struct IPAddress
 	
 	ushort port;
 	
+	
+	this(int a, int b, int c, int d, int port)
+	{
+		this.a = cast(ubyte)a;
+		this.b = cast(ubyte)b;
+		this.c = cast(ubyte)c;
+		this.d = cast(ubyte)d;
+		this.port = cast(ushort)port;
+	}
+	
 	/// Returns the first byte of the address as an integer.
 	@property int ai(){ return cast(int)a; }
 	/// Returns the second byte of the address as an integer.
@@ -75,21 +85,91 @@ struct IPAddress
 	
 	/// Returns the port as an integer.
 	@property int porti(){ return cast(int)port; }
+	
+	string toString()
+	{
+		return format("%d.%d.%d.%d:%d", a, b, c, d, port);
+	}
+	
+	bool opEquals(IPAddress other)
+	{
+		return integer == other.integer && port == other.port;
+	}
 }
 
+/*
+TODO: Remove if not needed
+
+class IPRetainer
+{
+	struct IPNode
+	{
+		IPAddress ip;
+		IPNode* prev;
+		IPNode* next;
+	}
+	
+	int count;
+	IPNode* first;
+	IPNode* last;
+	
+	int maxCount = 16;
+	
+	void add(IPAddress ip)
+	{
+		IPNode* newNode = new IPNode(ip);
+		if(!first)
+		{
+			first = newNode;
+			last = newNode;
+		}
+		else
+		{
+			newNode.next = first;
+			first.prev = newNode;
+			first = newNode;
+		}
+		count++;
+		if(count > maxCount)
+		{
+			last = last.prev;
+			count--;
+		}
+	}
+	
+	IPAddress get(int i)
+	{
+		if(i < 0 || i >= count)
+			throw new Exception(format("Index out of bounds: %d", i));
+		
+		int cur = 0;
+		IPNode* node = first;
+		while(cur < i)
+		{
+			node = node.next;
+			cur++;
+		}
+		
+		return node.ip;
+	}
+	
+}
+*/
+
+private IPAddress zeroIP = IPAddress(0, 0, 0, 0, 0);
 
 class MasterServerQuery
 {
 	Socket socket;
 	
-	ubyte[] currentQueryData;
+	Query currentQuery;
 	
 	/// Number of seconds to wait on data before making another attempt
 	int timeoutDuration = 3;
 	/// Number of attempts made to query the master server before exiting
-	int maxAttempts = 4;
+	int maxAttempts = 5;
 	
-	/// Buffer for received network data.
+	/// Buffer for received network data. Biggest packet valve has sent thus far is 1392 (231 IPs)
 	ubyte[2048] buffer;
 	/// Slice from buffer that has been written to
 	ubyte[] bufferSlice;
@@ -104,8 +184,44 @@ class MasterServerQuery
 		socket.blocking = false;
 	}
 	
+	~this()
+	{
+		socket.close();
+	}
+	
 	/// Start's a server query
 	void query(Query query)
+	{
+		currentQuery = query;
+		sendQuery(currentQuery);
+		
+		while(true)
+		{
+			bool success = false;
+			for(int i = 0; i < maxAttempts; i++)
+			{
+				if(wait())
+				{
+					success = true;
+					break;
+				}
+				else
+				{
+					io.writeln("Resending: ", currentQuery);
+					sendQuery(currentQuery);
+				}
+			}
+			
+			if(!success)
+				throw new Exception("Connection timed out.");
+			
+			if(process())
+				break;
+		}
+		
+	}
+	
+	void sendQuery(Query query)
 	{
 		// 1 byte message type
 		// 1 byte region code
@@ -134,24 +250,7 @@ class MasterServerQuery
 		slice[query.filter.length] = 0;
 		slice = slice[query.filter.length+1..$];
 		
-		currentQueryData = data;
 		socket.send(data);
-		
-		bool success = false;
-		for(int i = 0; i < maxAttempts; i++)
-		{
-			if(wait())
-			{
-				success = true;
-				break;
-			}
-		}
-		
-		if(!success)
-			throw new Exception("Connection timed out.");
-		
-		process();
-		
 	}
 	
 	/// Waits for a response until time out.
@@ -168,6 +267,7 @@ class MasterServerQuery
 			{
 				if(buffer[0..magic.length] == magic)
 				{
+					//io.writeln(bytesRead);
 					bufferSlice = buffer[magic.length..bytesRead];
 					return true;
 				}
@@ -194,7 +294,7 @@ class MasterServerQuery
 		return false;
 	}
 	
-	void process()
+	bool process()
 	{
 		ubyte[] data = bufferSlice;
 		
@@ -212,7 +312,7 @@ class MasterServerQuery
 			
 			data = data[6..$];
 			
-			lastIP = ip;
+			lastIP = IPAddress(ip.a, ip.b, ip.c, ip.d, ip.port);
 			
 			if(onReceiveIP)
 				onReceiveIP(ip);
@@ -220,7 +320,18 @@ class MasterServerQuery
 		if(data.length > 0)
 			io.writeln("Extra data in packet: ", data);
 		
-		
+		if(lastIP == zeroIP)
+		{
+			io.writeln("Reached the end of the list.");
+			return true;
+		}
+		else
+		{
+			currentQuery.ip = lastIP.toString();
+			sleepms(250);
+			sendQuery(currentQuery);
+		}
+		return false;
 	}
 }
 
@@ -231,13 +342,20 @@ void main()
 	Query query;
 	query.region = Region.world;
 	query.ip = "0.0.0.0:0";
-	query.filter = "";
+	query.filter = "\\appid\\4000";
 	
 	msq.onReceiveIP = delegate void(IPAddress ip)
 	{
 		io.writeln(ip.a, ".", ip.b, ".", ip.c, ".", ip.d, ":", ip.port);
 	};
 	
-	msq.query(query);
+	try
+	{
+		msq.query(query);
+	}
+	catch(Exception e)
+	{
+		io.writeln("Error: ", e);
+	}
 	
 }
