@@ -227,7 +227,7 @@ class MasterServerQuery
 		// 1 byte region code
 		// n+1 bytes string (append null-terminator)
 		// n+1 bytes string (append null-terminator)
-		int size = 1+1+(query.ip.length+1)+(query.filter.length+1);
+		int size = 1+1+(cast(int)query.ip.length+1)+(cast(int)query.filter.length+1);
 		ubyte[] data = new ubyte[size];
 		
 		ubyte[] slice = data;
@@ -262,7 +262,7 @@ class MasterServerQuery
 		auto timeout = timeInMs(timeoutDuration*1000);
 		while(!pastTime(timeout))
 		{
-			int bytesRead = socket.receive(buffer);
+			int bytesRead = cast(int)socket.receive(buffer);
 			if(bytesRead > cast(int)magic.length)
 			{
 				if(buffer[0..magic.length] == magic)
